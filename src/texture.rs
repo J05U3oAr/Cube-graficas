@@ -2,34 +2,16 @@ use crate::{
     geometry::{Cube, Hit},
     math::Vec3,
 };
+use image::ImageFormat;
 
-const TEXTURE_SIZE: i32 = 16;
-const RELIEF_STRENGTH: f32 = 0.62;
+const RELIEF_STRENGTH: f32 = 0.52;
+const PIXEL_GRID_SIZE: f32 = 16.0;
 
-// Patrón original de 16x16 inspirado en las vetas dispersas de la mena de diamante.
-const ORE_PATTERN: [u16; 16] = [
-    0b0000_0000_0000_0000,
-    0b0000_0110_0001_0000,
-    0b0000_1110_0011_0000,
-    0b0100_1000_1110_0010,
-    0b0110_0000_1100_0110,
-    0b0011_0001_0000_1100,
-    0b0001_0011_1000_1000,
-    0b1000_0111_1001_1000,
-    0b1100_0011_0011_0001,
-    0b0110_0100_0110_0011,
-    0b0011_1000_1100_0110,
-    0b0001_1000_0100_1100,
-    0b0100_0110_0011_1000,
-    0b1100_1100_0001_0000,
-    0b1000_1000_0000_0000,
-    0b0000_0000_0000_0000,
-];
-
-#[derive(Clone, Copy)]
-struct Texel {
-    color: Vec3,
-    height: f32,
+pub struct ImageTexture {
+    width: usize,
+    height: usize,
+    colors: Vec<Vec3>,
+    heights: Vec<f32>,
 }
 
 pub struct Surface {
@@ -37,24 +19,70 @@ pub struct Surface {
     pub normal: Vec3,
 }
 
-pub fn diamond_ore_surface(cube: &Cube, hit: Hit) -> Surface {
-    let (u, v, tangent_u, tangent_v, face) = face_coordinates(cube, hit);
-    let x = (u.clamp(0.0, 0.999_999) * TEXTURE_SIZE as f32) as i32;
-    let y = ((1.0 - v).clamp(0.0, 0.999_999) * TEXTURE_SIZE as f32) as i32;
-    let center = sample(face, x, y);
+impl ImageTexture {
+    pub fn from_png_bytes(bytes: &[u8]) -> Result<Self, image::ImageError> {
+        let image = image::load_from_memory_with_format(bytes, ImageFormat::Png)?.to_rgb8();
+        let width = image.width() as usize;
+        let height = image.height() as usize;
+        let mut colors = Vec::with_capacity(width * height);
+        let mut heights = Vec::with_capacity(width * height);
 
-    // El gradiente del mapa de altura altera la normal solo en las vetas.
-    let height_left = sample(face, x - 1, y).height;
-    let height_right = sample(face, x + 1, y).height;
-    let height_up = sample(face, x, y - 1).height;
-    let height_down = sample(face, x, y + 1).height;
+        for pixel in image.pixels() {
+            let red = pixel[0] as f32 / 255.0;
+            let green = pixel[1] as f32 / 255.0;
+            let blue = pixel[2] as f32 / 255.0;
+
+            colors.push(Vec3::new(
+                srgb_to_linear(red),
+                srgb_to_linear(green),
+                srgb_to_linear(blue),
+            ));
+
+            // El cian sobresale; la piedra gris permanece casi plana.
+            let cyan = ((green + blue) * 0.5 - red).max(0.0);
+            heights.push((cyan * 2.5).clamp(0.0, 1.0));
+        }
+
+        Ok(Self {
+            width,
+            height,
+            colors,
+            heights,
+        })
+    }
+
+    fn color_at(&self, u: f32, v: f32) -> Vec3 {
+        self.colors[self.index_at(u, v)]
+    }
+
+    fn height_at(&self, u: f32, v: f32) -> f32 {
+        self.heights[self.index_at(u, v)]
+    }
+
+    fn index_at(&self, u: f32, v: f32) -> usize {
+        let x = (u.clamp(0.0, 0.999_999) * self.width as f32) as usize;
+        let y = ((1.0 - v).clamp(0.0, 0.999_999) * self.height as f32) as usize;
+        y * self.width + x
+    }
+}
+
+pub fn diamond_ore_surface(cube: &Cube, hit: Hit, texture: &ImageTexture) -> Surface {
+    let (u, v, tangent_u, tangent_v) = face_coordinates(cube, hit);
+    let texel_step = 1.0 / PIXEL_GRID_SIZE;
+
+    // El color viene directamente de diamantito.png. El gradiente de sus zonas
+    // cian inclina la normal y conserva el relieve solicitado.
+    let height_left = texture.height_at(u - texel_step, v);
+    let height_right = texture.height_at(u + texel_step, v);
+    let height_down = texture.height_at(u, v - texel_step);
+    let height_up = texture.height_at(u, v + texel_step);
     let normal = (hit.normal
         + tangent_u * ((height_left - height_right) * RELIEF_STRENGTH)
         + tangent_v * ((height_down - height_up) * RELIEF_STRENGTH))
         .normalize();
 
     Surface {
-        albedo: center.color,
+        albedo: texture.color_at(u, v),
         normal,
     }
 }
@@ -68,7 +96,7 @@ pub fn floor_color(point: Vec3) -> Vec3 {
     }
 }
 
-fn face_coordinates(cube: &Cube, hit: Hit) -> (f32, f32, Vec3, Vec3, u32) {
+fn face_coordinates(cube: &Cube, hit: Hit) -> (f32, f32, Vec3, Vec3) {
     let size = cube.max.x - cube.min.x;
     let point = hit.point;
 
@@ -78,7 +106,6 @@ fn face_coordinates(cube: &Cube, hit: Hit) -> (f32, f32, Vec3, Vec3, u32) {
             (point.y - cube.min.y) / size,
             Vec3::new(0.0, 0.0, -1.0),
             Vec3::new(0.0, 1.0, 0.0),
-            0,
         )
     } else if hit.normal.x < -0.5 {
         (
@@ -86,7 +113,6 @@ fn face_coordinates(cube: &Cube, hit: Hit) -> (f32, f32, Vec3, Vec3, u32) {
             (point.y - cube.min.y) / size,
             Vec3::new(0.0, 0.0, 1.0),
             Vec3::new(0.0, 1.0, 0.0),
-            1,
         )
     } else if hit.normal.y > 0.5 {
         (
@@ -94,7 +120,6 @@ fn face_coordinates(cube: &Cube, hit: Hit) -> (f32, f32, Vec3, Vec3, u32) {
             (cube.max.z - point.z) / size,
             Vec3::new(1.0, 0.0, 0.0),
             Vec3::new(0.0, 0.0, -1.0),
-            2,
         )
     } else if hit.normal.y < -0.5 {
         (
@@ -102,7 +127,6 @@ fn face_coordinates(cube: &Cube, hit: Hit) -> (f32, f32, Vec3, Vec3, u32) {
             (point.z - cube.min.z) / size,
             Vec3::new(1.0, 0.0, 0.0),
             Vec3::new(0.0, 0.0, 1.0),
-            3,
         )
     } else if hit.normal.z > 0.5 {
         (
@@ -110,7 +134,6 @@ fn face_coordinates(cube: &Cube, hit: Hit) -> (f32, f32, Vec3, Vec3, u32) {
             (point.y - cube.min.y) / size,
             Vec3::new(1.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
-            4,
         )
     } else {
         (
@@ -118,64 +141,26 @@ fn face_coordinates(cube: &Cube, hit: Hit) -> (f32, f32, Vec3, Vec3, u32) {
             (point.y - cube.min.y) / size,
             Vec3::new(-1.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
-            5,
         )
     }
 }
 
-fn sample(face: u32, x: i32, y: i32) -> Texel {
-    if x < 0 || y < 0 || x >= TEXTURE_SIZE || y >= TEXTURE_SIZE {
-        return stone_texel(face, x.clamp(0, 15), y.clamp(0, 15));
-    }
-
-    let (pattern_x, pattern_y) = pattern_coordinates(face, x, y);
-    let is_ore = (ORE_PATTERN[pattern_y as usize] >> pattern_x) & 1 == 1;
-    if is_ore {
-        ore_texel(face, x, y)
+fn srgb_to_linear(value: f32) -> f32 {
+    if value <= 0.04045 {
+        value / 12.92
     } else {
-        stone_texel(face, x, y)
+        ((value + 0.055) / 1.055).powf(2.4)
     }
 }
 
-fn pattern_coordinates(face: u32, x: i32, y: i32) -> (i32, i32) {
-    match face {
-        0 => (x, y),
-        1 => (15 - x, y),
-        2 => (y, 15 - x),
-        3 => (15 - y, x),
-        4 => (15 - x, 15 - y),
-        _ => (y, x),
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::ImageTexture;
 
-fn ore_texel(face: u32, x: i32, y: i32) -> Texel {
-    let variation = hash(face, x, y) & 3;
-    let color = match variation {
-        0 => Vec3::new(0.03, 0.72, 0.78),
-        1 => Vec3::new(0.06, 0.92, 0.96),
-        2 => Vec3::new(0.18, 1.00, 1.00),
-        _ => Vec3::new(0.02, 0.52, 0.64),
-    };
-    Texel {
-        color,
-        height: 0.72 + variation as f32 * 0.08,
+    #[test]
+    fn loads_diamantito_asset() {
+        let texture = ImageTexture::from_png_bytes(include_bytes!("../assets/diamantito.png"))
+            .expect("diamantito.png debe ser un PNG válido");
+        assert_eq!((texture.width, texture.height), (360, 360));
     }
-}
-
-fn stone_texel(face: u32, x: i32, y: i32) -> Texel {
-    let noise = (hash(face, x, y) & 7) as f32 / 7.0;
-    let value = 0.16 + noise * 0.17;
-    Texel {
-        color: Vec3::new(value * 0.92, value * 0.98, value),
-        height: noise * 0.045,
-    }
-}
-
-fn hash(face: u32, x: i32, y: i32) -> u32 {
-    let mut value = (x as u32).wrapping_mul(0x045d_9f3b)
-        ^ (y as u32).wrapping_mul(0x119d_e1f3)
-        ^ face.wrapping_mul(0x3449_ba17);
-    value ^= value >> 16;
-    value = value.wrapping_mul(0x045d_9f3b);
-    value ^ (value >> 16)
 }

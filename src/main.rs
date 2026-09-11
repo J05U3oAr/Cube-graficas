@@ -30,7 +30,7 @@ fn main() {
         target: Vec3::new(0.0, 0.0, 0.0),
     };
     let mut camera = initial_camera;
-    let scene = Scene::diamond_ore();
+    let scene = Scene::diamantito();
     let mut frame = vec![0; WIDTH * HEIGHT];
 
     while window.is_open() && !window.is_key_down(Key::Escape) {

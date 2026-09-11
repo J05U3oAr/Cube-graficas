@@ -23,7 +23,8 @@ pub fn render(frame: &mut [u32], camera: &Camera, scene: &Scene) {
             let color = match cube_hit.or(floor_hit) {
                 Some(hit) => match hit.material {
                     Material::DiamondOre => {
-                        let surface = texture::diamond_ore_surface(&scene.cube, hit);
+                        let surface =
+                            texture::diamond_ore_surface(&scene.cube, hit, &scene.diamantito);
                         lighting::shade(
                             hit,
                             surface.albedo,
