@@ -4,6 +4,10 @@ Demostración de ray tracing de un cubo sobre un suelo con iluminación **exclus
 
 La cámara se calcula una sola vez por fotograma y los rayos primarios no se normalizan (no es necesario para estas intersecciones), reduciendo el trabajo de renderizado por píxel.
 
+## Demostración
+
+![Grabación del cubo sin textura](assets/grabacion-cubo-sin-textura.gif)
+
 ## Ejecutar
 
 ```powershell
