@@ -17,6 +17,10 @@ La cámara se calcula una sola vez por fotograma y los rayos primarios no se nor
 - `scene.rs`: objetos y luz de la escena.
 - `renderer.rs`: trazado y conversión final de color.
 
+## Demostración
+
+![Grabación del cubo texturizado](assets/grabacion-cubo-texturizado.gif)
+
 ## Ejecutar
 
 ```powershell
